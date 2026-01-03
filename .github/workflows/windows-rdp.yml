@@ -20,9 +20,9 @@ jobs:
         shell: pwsh
         run: .github/workflows/scripts/win-create-user.ps1
 
-      - name: Install Apps (Chrome, Sogou Pinyin)
-        shell: pwsh
-        run: .github/workflows/scripts/win-install-apps.ps1
+      # - name: Install Apps (Chrome, Sogou Pinyin)
+      #   shell: pwsh
+      #   run: .github/workflows/scripts/win-install-apps.ps1
 
       # - name: Install Chinese Language Pack
       #   shell: pwsh
