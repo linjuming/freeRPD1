@@ -42,6 +42,11 @@ jobs:
         shell: pwsh
         run: .github/workflows/scripts/win-verify-rdp.ps1
 
+      # 安装metting会议软件
+      - name: Install Custom Software
+        shell: pwsh
+        run: .github/workflows/scripts/win-install-custom-app.ps1
+
       - name: Maintain Connection
         shell: pwsh
         run: |
