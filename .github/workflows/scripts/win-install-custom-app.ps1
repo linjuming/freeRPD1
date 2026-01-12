@@ -1,55 +1,73 @@
 $ErrorActionPreference = "Stop"
 
-# ===============================
-# 1. 下载并安装软件（所有用户）
-# ===============================
-
 $downloadUrl = "https://clouddrive.huawei.com/f/89208a85de5562f0f292be80ee903a63"
-$downloadDir = "$env:TEMP\custom_app"
-$installerPath = "$downloadDir\installer.exe"
+$downloadDir = "C:\Temp\HuaweiDownload"
 
 New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
-Invoke-WebRequest -Uri $downloadUrl -OutFile $installerPath -UseBasicParsing
-
-Start-Process -FilePath $installerPath `
-    -ArgumentList "/S", "/silent", "/quiet", "/allusers" `
-    -Wait
 
 # ===============================
-# 2. 创建所有用户桌面快捷方式
+# 1. 用 Edge 触发真实下载
 # ===============================
 
-$publicDesktop = "C:\Users\Public\Desktop"
-$wsh = New-Object -ComObject WScript.Shell
+$edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 
-function Create-WebShortcut {
-    param (
-        [string]$FileName,     # 英文文件名（关键）
-        [string]$DisplayName,  # 中文显示名
-        [string]$Url
-    )
+Write-Host "Launching Edge to download installer..."
 
-    $shortcutPath = Join-Path $publicDesktop "$FileName.lnk"
+Start-Process $edge `
+  -ArgumentList @(
+    "--no-first-run",
+    "--disable-popup-blocking",
+    "--disable-extensions",
+    "--disable-infobars",
+    "--user-data-dir=$downloadDir\profile",
+    "--download-default-directory=$downloadDir",
+    "--download-prompt-for-download=false",
+    $downloadUrl
+  )
 
-    Write-Host "Creating shortcut: $DisplayName"
+# ===============================
+# 2. 等待真正的安装包出现
+# ===============================
 
-    $shortcut = $wsh.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath = $Url
-    $shortcut.Description = $DisplayName
-    $shortcut.IconLocation = "shell32.dll, 220"
-    $shortcut.Save()
+Write-Host "Waiting for installer download..."
+
+$timeout = 300
+$elapsed = 0
+$installer = $null
+
+while ($elapsed -lt $timeout) {
+    $files = Get-ChildItem $downloadDir -File |
+        Where-Object {
+            $_.Extension -match "\.(exe|msi)$" -and $_.Length -gt 5MB
+        }
+
+    if ($files) {
+        $installer = $files[0].FullName
+        break
+    }
+
+    Start-Sleep 5
+    $elapsed += 5
 }
 
-# 华为入会
-Create-WebShortcut `
-    -FileName "Huawei-Meeting" `
-    -DisplayName "华为入会" `
-    -Url "https://imeeting.huawei.com/meeting/joinwelink?id=95979031&pwd=MTIzMzIx&token=rz3Uutv1CTht1LP2mGJpNBnBhhJh8Pjq4&stype=0"
+if (-not $installer) {
+    throw "Installer download failed or not detected."
+}
 
-# 谷歌远程桌面
-Create-WebShortcut `
-    -FileName "Google-Remote-Desktop" `
-    -DisplayName "谷歌远程桌面连接" `
-    -Url "https://remotedesktop.google.com/access/"
+Write-Host "Installer detected: $installer"
 
-Write-Host "All-user desktop shortcuts created successfully."
+# ===============================
+# 3. 安装（所有用户）
+# ===============================
+
+if ($installer.EndsWith(".msi")) {
+    Start-Process "msiexec.exe" `
+        -ArgumentList "/i `"$installer`" /qn ALLUSERS=1" `
+        -Wait
+} else {
+    Start-Process $installer `
+        -ArgumentList "/S", "/silent", "/quiet", "/allusers" `
+        -Wait
+}
+
+Write-Host "Software installed successfully."
