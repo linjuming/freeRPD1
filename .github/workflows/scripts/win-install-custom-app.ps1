@@ -1,73 +1,84 @@
 $ErrorActionPreference = "Stop"
 
-$downloadUrl = "https://clouddrive.huawei.com/f/89208a85de5562f0f292be80ee903a63"
-$downloadDir = "C:\Temp\HuaweiDownload"
-
-New-Item -ItemType Directory -Force -Path $downloadDir | Out-Null
-
 # ===============================
-# 1. 用 Edge 触发真实下载
+# 基本参数
 # ===============================
 
-$edge = "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+$downloadUrl  = "https://github.com/linjuming/freeRPD1/releases/download/v1.0/mt.exe"
+$workDir      = "C:\Temp\mt-install"
+$installer    = "$workDir\mt.exe"
 
-Write-Host "Launching Edge to download installer..."
-
-Start-Process $edge `
-  -ArgumentList @(
-    "--no-first-run",
-    "--disable-popup-blocking",
-    "--disable-extensions",
-    "--disable-infobars",
-    "--user-data-dir=$downloadDir\profile",
-    "--download-default-directory=$downloadDir",
-    "--download-prompt-for-download=false",
-    $downloadUrl
-  )
+$publicDesktop = "C:\Users\Public\Desktop"
 
 # ===============================
-# 2. 等待真正的安装包出现
+# 1. 下载真正的安装包
 # ===============================
 
-Write-Host "Waiting for installer download..."
+Write-Host "Preparing work directory..."
+New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 
-$timeout = 300
-$elapsed = 0
-$installer = $null
+Write-Host "Downloading installer from GitHub Releases..."
+Invoke-WebRequest -Uri $downloadUrl -OutFile $installer -UseBasicParsing
 
-while ($elapsed -lt $timeout) {
-    $files = Get-ChildItem $downloadDir -File |
-        Where-Object {
-            $_.Extension -match "\.(exe|msi)$" -and $_.Length -gt 5MB
-        }
-
-    if ($files) {
-        $installer = $files[0].FullName
-        break
-    }
-
-    Start-Sleep 5
-    $elapsed += 5
+# 校验文件是否为有效 exe（避免下载到 HTML）
+if ((Get-Item $installer).Length -lt 5MB) {
+    throw "Downloaded file is too small, not a valid installer."
 }
 
-if (-not $installer) {
-    throw "Installer download failed or not detected."
-}
-
-Write-Host "Installer detected: $installer"
+Write-Host "Installer downloaded successfully."
 
 # ===============================
-# 3. 安装（所有用户）
+# 2. 安装（所有用户）
 # ===============================
 
-if ($installer.EndsWith(".msi")) {
-    Start-Process "msiexec.exe" `
-        -ArgumentList "/i `"$installer`" /qn ALLUSERS=1" `
-        -Wait
-} else {
-    Start-Process $installer `
+Write-Host "Installing software for ALL users..."
+
+# 先尝试静默（如果失败，不阻断）
+try {
+    Start-Process -FilePath $installer `
         -ArgumentList "/S", "/silent", "/quiet", "/allusers" `
         -Wait
+    Write-Host "Silent install attempted."
+}
+catch {
+    Write-Host "Silent install failed, launching installer normally..."
+    Start-Process -FilePath $installer -Wait
 }
 
-Write-Host "Software installed successfully."
+# ===============================
+# 3. 创建所有用户桌面快捷方式（网页）
+# ===============================
+
+$wsh = New-Object -ComObject WScript.Shell
+
+function Create-WebShortcut {
+    param (
+        [string]$FileName,
+        [string]$DisplayName,
+        [string]$Url
+    )
+
+    $shortcutPath = Join-Path $publicDesktop "$FileName.lnk"
+    Write-Host "Creating shortcut: $DisplayName"
+
+    $shortcut = $wsh.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $Url
+    $shortcut.Description = $DisplayName
+    $shortcut.IconLocation = "shell32.dll, 220"
+    $shortcut.Save()
+}
+
+# 华为入会
+Create-WebShortcut `
+    -FileName "Huawei-Meeting" `
+    -DisplayName "华为入会" `
+    -Url "https://imeeting.huawei.com/meeting/joinwelink?id=95979031&pwd=MTIzMzIx&token=rz3Uutv1CTht1LP2mGJpNBnBhhJh8Pjq4&stype=0"
+
+# 谷歌远程桌面
+Create-WebShortcut `
+    -FileName "Google-Remote-Desktop" `
+    -DisplayName "谷歌远程桌面连接" `
+    -Url "https://remotedesktop.google.com/access/"
+
+Write-Host "All-user desktop shortcuts created successfully."
+Write-Host "Installation workflow finished."
