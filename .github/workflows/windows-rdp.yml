@@ -1,13 +1,10 @@
 name: Windows RDP Server
-
 on:
   workflow_dispatch:
-
 jobs:
   secure-rdp:
     runs-on: windows-latest
     timeout-minutes: 3600
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,6 +44,48 @@ jobs:
         shell: pwsh
         run: .github/workflows/scripts/win-install-custom-app.ps1
 
+      # ==================== 新增步骤 ====================
+      - name: Create Logout.bat (优雅断开RDP不锁屏)
+        shell: pwsh
+        run: |
+          # 确保 vum 用户桌面目录存在
+          $desktopPath = "C:\Users\vum\Desktop"
+          if (-not (Test-Path $desktopPath)) {
+            New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
+          }
+
+          $batContent = @'
+@echo off
+echo.
+echo ==================== 优雅断开 RDP ====================
+echo 正在执行 tscon 切换到控制台会话（不会锁屏）...
+timeout /t 2 /nobreak >nul
+for /f "skip=1 tokens=3" %%s in ('query user %USERNAME%') do (
+    echo 当前会话ID: %%s
+    %windir%\System32\tscon.exe %%s /dest:console
+)
+echo.
+echo 操作完成！现在可以安全关闭 RDP 窗口了。
+echo 远程桌面将保持解锁状态，会议软件不会断开。
+echo.
+pause
+'@
+
+          $batPath = "$desktopPath\Logout.bat"
+          $batContent | Out-File -FilePath $batPath -Encoding ascii -Force
+          Write-Host "✅ Logout.bat 已创建到 vum 用户桌面: $batPath"
+
+          # 创建桌面快捷方式
+          $shortcutPath = "$desktopPath\优雅断开RDP.lnk"
+          $WshShell = New-Object -ComObject WScript.Shell
+          $Shortcut = $WshShell.CreateShortcut($shortcutPath)
+          $Shortcut.TargetPath = $batPath
+          $Shortcut.WorkingDirectory = $desktopPath
+          $Shortcut.Description = "优雅断开RDP连接，防止锁屏"
+          $Shortcut.Save()
+          Write-Host "✅ 桌面快捷方式已创建: 优雅断开RDP.lnk"
+      # ===================================================
+
       - name: Maintain Connection
         shell: pwsh
         run: |
@@ -54,6 +93,11 @@ jobs:
           Write-Host "Address: $env:TAILSCALE_IP"
           Write-Host "Username: vum"
           Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host ""
+          Write-Host "✅ 重要提示："
+          Write-Host "   关闭 RDP 前，请先在远程桌面双击【优雅断开RDP.lnk】"
+          Write-Host "   或运行 Logout.bat（推荐右键→以管理员身份运行）"
+          Write-Host "   这样断开后远程电脑不会锁屏，会议软件可继续运行！"
           Write-Host "==================`n"
           while ($true) {
             Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
