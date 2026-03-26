@@ -6,7 +6,7 @@ on:
 jobs:
   secure-rdp:
     runs-on: windows-latest
-    timeout-minutes: 360  # 修正：最大360分钟
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -17,16 +17,22 @@ jobs:
         run: .github/workflows/scripts/win-configure-rdp.ps1
 
       - name: Create RDP User with Secure Password
-        id: create-user
         shell: pwsh
         run: .github/workflows/scripts/win-create-user.ps1
+
+      # - name: Install Apps (Chrome, Sogou Pinyin)
+      #   shell: pwsh
+      #   run: .github/workflows/scripts/win-install-apps.ps1
+
+      # - name: Install Chinese Language Pack
+      #   shell: pwsh
+      #   run: .github/workflows/scripts/win-install-chinese-lang.ps1
 
       - name: Install Tailscale
         shell: pwsh
         run: .github/workflows/scripts/win-install-tailscale.ps1
 
       - name: Establish Tailscale Connection
-        id: tailscale
         shell: pwsh
         env:
           TAILSCALE_AUTH_KEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
@@ -40,8 +46,7 @@ jobs:
         shell: pwsh
         run: .github/workflows/scripts/win-install-custom-app.ps1
 
-      # ==================== 修正后的 Logout.bat 创建步骤 ====================
-      - name: Create Logout.bat (优雅断开RDP不锁屏)
+      - name: Create Logout.bat (Graceful RDP Disconnect)
         shell: pwsh
         run: |
           $desktopPath = "C:\Users\vum\Desktop"
@@ -49,54 +54,68 @@ jobs:
             New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
           }
 
-          # 使用数组拼接避免 here-string 缩进问题
           $batLines = @(
             '@echo off',
+            'chcp 65001 >nul',
             'echo.',
-            'echo ==================== 优雅断开 RDP ====================',
-            'echo 正在执行 tscon 切换到控制台会话（不会锁屏）...',
+            'echo ==================== Graceful RDP Disconnect ====================',
+            'echo Switching to console session (prevents screen lock)...',
             'timeout /t 2 /nobreak >nul',
             '',
             'for /f "skip=1 tokens=3" %%s in (''query user %USERNAME%'') do (',
-            '    echo 当前会话ID: %%s',
+            '    echo Current Session ID: %%s',
             '    %windir%\System32\tscon.exe %%s /dest:console',
             ')',
             '',
             'echo.',
-            'echo 操作完成！现在可以安全关闭 RDP 窗口了。',
-            'echo 远程桌面将保持解锁状态，会议软件不会断开。',
+            'echo ==================== Operation Complete ====================',
+            'echo You can safely close the RDP window now.',
+            'echo Remote desktop will remain UNLOCKED.',
+            'echo Meeting software will continue running.',
             'echo.',
             'pause'
           )
 
           $batPath = "$desktopPath\Logout.bat"
           $batLines | Set-Content -Path $batPath -Encoding ASCII -Force
-          Write-Host "✅ Logout.bat 已创建到 vum 用户桌面: $batPath"
+          Write-Host "Logout.bat created at: $batPath"
 
-          # 创建桌面快捷方式
-          $shortcutPath = "$desktopPath\优雅断开RDP.lnk"
+          $shortcutPath = "$desktopPath\Disconnect-RDP.lnk"
           $WshShell = New-Object -ComObject WScript.Shell
           $Shortcut = $WshShell.CreateShortcut($shortcutPath)
           $Shortcut.TargetPath = $batPath
           $Shortcut.WorkingDirectory = $desktopPath
-          $Shortcut.Description = "优雅断开RDP连接，防止锁屏"
+          $Shortcut.Description = "Gracefully disconnect RDP without locking screen"
           $Shortcut.Save()
-          Write-Host "✅ 桌面快捷方式已创建: 优雅断开RDP.lnk"
+          Write-Host "Desktop shortcut created: Disconnect-RDP.lnk"
 
       - name: Maintain Connection
         shell: pwsh
         run: |
           Write-Host ""
-          Write-Host "=== RDP ACCESS ==="
+          Write-Host "============================================"
+          Write-Host "           RDP ACCESS INFORMATION"
+          Write-Host "============================================"
+          Write-Host ""
           Write-Host "Username: vum"
           Write-Host ""
-          Write-Host "✅ 重要提示："
-          Write-Host "   关闭 RDP 前，请在远程桌面双击【优雅断开RDP.lnk】"
-          Write-Host "   或运行 Logout.bat"
-          Write-Host "=================="
+          Write-Host "============================================"
+          Write-Host "           IMPORTANT NOTICE"
+          Write-Host "============================================"
+          Write-Host ""
+          Write-Host "Before closing RDP, please do ONE of the following:"
+          Write-Host ""
+          Write-Host "  1. Double-click [Disconnect-RDP.lnk] on desktop"
+          Write-Host "  2. Run Logout.bat (Right-click -> Run as Administrator)"
+          Write-Host ""
+          Write-Host "This ensures:"
+          Write-Host "  - Remote PC stays UNLOCKED"
+          Write-Host "  - Meeting software keeps running"
+          Write-Host ""
+          Write-Host "============================================"
           Write-Host ""
           
           while ($true) {
-            Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+            Write-Host "[$(Get-Date)] RDP Session Active - Use Ctrl+C in workflow to terminate"
             Start-Sleep -Seconds 300
           }
