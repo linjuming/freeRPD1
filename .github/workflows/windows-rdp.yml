@@ -46,13 +46,54 @@ jobs:
         shell: pwsh
         run: .github/workflows/scripts/win-install-custom-app.ps1
 
+      # ===== 修正：禁用RDP会话超时 + 修正桌面路径 =====
+      - name: Disable RDP Session Timeout
+        shell: pwsh
+        run: |
+          Write-Host "Disabling RDP session timeout policies..."
+
+          # 禁用会话超时（组策略）
+          $regPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
+          if (-not (Test-Path $regPath)) {
+            New-Item -Path $regPath -Force | Out-Null
+          }
+
+          # 禁用断开连接超时
+          Set-ItemProperty -Path $regPath -Name "MaxDisconnectionTime" -Value 0 -Type DWord -Force
+          # 禁用活动会话超时
+          Set-ItemProperty -Path $regPath -Name "MaxConnectionTime" -Value 0 -Type DWord -Force
+          # 禁用空闲超时
+          Set-ItemProperty -Path $regPath -Name "MaxIdleTime" -Value 0 -Type DWord -Force
+          # 禁用断开后重置会话
+          Set-ItemProperty -Path $regPath -Name "fResetBroken" -Value 0 -Type DWord -Force
+          # 保持断开的会话
+          Set-ItemProperty -Path $regPath -Name "fInheritResetBroken" -Value 0 -Type DWord -Force
+
+          Write-Host "RDP session timeout disabled successfully."
+
+          # 同时通过 sc 配置保持 RDP 服务稳定
+          & sc.exe config TermService start= auto
+          & net start TermService 2>$null
+
+          Write-Host "RDP service configured to auto-start."
+
       - name: Create Logout.bat (Graceful RDP Disconnect)
         shell: pwsh
         run: |
-          $desktopPath = "C:\Users\vum\Desktop"
-          if (-not (Test-Path $desktopPath)) {
-            New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
+          # 先等待用户Profile目录创建完成
+          $maxWait = 30
+          $waited = 0
+          while (-not (Test-Path "C:\Users\vum") -and $waited -lt $maxWait) {
+            Write-Host "Waiting for user profile to be created... ($waited s)"
+            Start-Sleep -Seconds 2
+            $waited += 2
           }
+
+          # 使用多个可能的桌面路径，确保文件一定能被找到
+          $desktopPaths = @(
+            "C:\Users\vum\Desktop",
+            "C:\Users\Public\Desktop"
+          )
 
           $batLines = @(
             '@echo off',
@@ -76,46 +117,73 @@ jobs:
             'pause'
           )
 
-          $batPath = "$desktopPath\Logout.bat"
-          $batLines | Set-Content -Path $batPath -Encoding ASCII -Force
-          Write-Host "Logout.bat created at: $batPath"
+          foreach ($desktopPath in $desktopPaths) {
+            # 确保目录存在
+            if (-not (Test-Path $desktopPath)) {
+              New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
+              Write-Host "Created directory: $desktopPath"
+            }
 
-          $shortcutPath = "$desktopPath\Disconnect-RDP.lnk"
-          $WshShell = New-Object -ComObject WScript.Shell
-          $Shortcut = $WshShell.CreateShortcut($shortcutPath)
-          $Shortcut.TargetPath = $batPath
-          $Shortcut.WorkingDirectory = $desktopPath
-          $Shortcut.Description = "Gracefully disconnect RDP without locking screen"
-          $Shortcut.Save()
-          Write-Host "Desktop shortcut created: Disconnect-RDP.lnk"
+            # 写入 Logout.bat
+            $batPath = "$desktopPath\Logout.bat"
+            $batLines | Set-Content -Path $batPath -Encoding ASCII -Force
+            Write-Host "Logout.bat created at: $batPath"
+
+            # 创建快捷方式
+            try {
+              $shortcutPath = "$desktopPath\Disconnect-RDP.lnk"
+              $WshShell = New-Object -ComObject WScript.Shell
+              $Shortcut = $WshShell.CreateShortcut($shortcutPath)
+              $Shortcut.TargetPath = $batPath
+              $Shortcut.WorkingDirectory = $desktopPath
+              $Shortcut.Description = "Gracefully disconnect RDP without locking screen"
+              $Shortcut.Save()
+              Write-Host "Shortcut created at: $shortcutPath"
+            } catch {
+              Write-Host "Warning: Could not create shortcut at $desktopPath - $_"
+            }
+          }
+
+          # 额外：把文件也放到 C:\Users\vum 根目录，方便找
+          $fallbackPath = "C:\Users\vum\Logout.bat"
+          $batLines | Set-Content -Path $fallbackPath -Encoding ASCII -Force
+          Write-Host "Fallback Logout.bat also created at: $fallbackPath"
+
+          # 验证文件存在
+          Write-Host ""
+          Write-Host "=== Verification ==="
+          foreach ($desktopPath in $desktopPaths) {
+            $batPath = "$desktopPath\Logout.bat"
+            if (Test-Path $batPath) {
+              Write-Host "[OK] $batPath"
+            } else {
+              Write-Host "[MISSING] $batPath"
+            }
+          }
 
       - name: Maintain Connection
         shell: pwsh
         run: |
           Write-Host ""
           Write-Host "============================================"
-          Write-Host "           RDP ACCESS INFORMATION"
+          Write-Host "        RDP ACCESS INFORMATION"
+          Write-Host "============================================"
+          Write-Host "Username : vum"
           Write-Host "============================================"
           Write-Host ""
-          Write-Host "Username: vum"
+          Write-Host "Logout.bat locations:"
+          Write-Host "  1. C:\Users\vum\Desktop\Logout.bat"
+          Write-Host "  2. C:\Users\Public\Desktop\Logout.bat  <- Public Desktop (easier to find)"
+          Write-Host "  3. C:\Users\vum\Logout.bat             <- Fallback"
           Write-Host ""
-          Write-Host "============================================"
-          Write-Host "           IMPORTANT NOTICE"
-          Write-Host "============================================"
-          Write-Host ""
-          Write-Host "Before closing RDP, please do ONE of the following:"
-          Write-Host ""
-          Write-Host "  1. Double-click [Disconnect-RDP.lnk] on desktop"
-          Write-Host "  2. Run Logout.bat (Right-click -> Run as Administrator)"
-          Write-Host ""
-          Write-Host "This ensures:"
-          Write-Host "  - Remote PC stays UNLOCKED"
-          Write-Host "  - Meeting software keeps running"
+          Write-Host "Before closing RDP:"
+          Write-Host "  Double-click [Disconnect-RDP.lnk] on desktop"
+          Write-Host "  OR right-click Logout.bat -> Run as Administrator"
           Write-Host ""
           Write-Host "============================================"
           Write-Host ""
-          
+
           while ($true) {
-            Write-Host "[$(Get-Date)] RDP Session Active - Use Ctrl+C in workflow to terminate"
+            Write-Host "[$(Get-Date)] RDP Session Active - Ctrl+C to terminate"
             Start-Sleep -Seconds 300
           }
