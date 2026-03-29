@@ -46,41 +46,42 @@ jobs:
         shell: pwsh
         run: .github/workflows/scripts/win-install-custom-app.ps1
 
-      # ===== 修正：禁用RDP会话超时 + 修正桌面路径 =====
       - name: Disable RDP Session Timeout
         shell: pwsh
         run: |
           Write-Host "Disabling RDP session timeout policies..."
 
-          # 禁用会话超时（组策略）
           $regPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
           if (-not (Test-Path $regPath)) {
             New-Item -Path $regPath -Force | Out-Null
           }
 
-          # 禁用断开连接超时
           Set-ItemProperty -Path $regPath -Name "MaxDisconnectionTime" -Value 0 -Type DWord -Force
-          # 禁用活动会话超时
-          Set-ItemProperty -Path $regPath -Name "MaxConnectionTime" -Value 0 -Type DWord -Force
-          # 禁用空闲超时
-          Set-ItemProperty -Path $regPath -Name "MaxIdleTime" -Value 0 -Type DWord -Force
-          # 禁用断开后重置会话
-          Set-ItemProperty -Path $regPath -Name "fResetBroken" -Value 0 -Type DWord -Force
-          # 保持断开的会话
-          Set-ItemProperty -Path $regPath -Name "fInheritResetBroken" -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $regPath -Name "MaxConnectionTime"    -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $regPath -Name "MaxIdleTime"          -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $regPath -Name "fResetBroken"         -Value 0 -Type DWord -Force
+          Set-ItemProperty -Path $regPath -Name "fInheritResetBroken"  -Value 0 -Type DWord -Force
+
+          Write-Host "Registry timeout policies disabled."
+
+          # 配置服务自启
+          & sc.exe config TermService start= auto | Out-Null
+
+          # 只在服务未运行时才启动
+          $svc = Get-Service -Name TermService -ErrorAction SilentlyContinue
+          if ($svc.Status -ne 'Running') {
+            Start-Service -Name TermService -ErrorAction SilentlyContinue
+            Write-Host "TermService started."
+          } else {
+            Write-Host "TermService is already running. Skipping start."
+          }
 
           Write-Host "RDP session timeout disabled successfully."
-
-          # 同时通过 sc 配置保持 RDP 服务稳定
-          & sc.exe config TermService start= auto
-          & net start TermService 2>$null
-
-          Write-Host "RDP service configured to auto-start."
 
       - name: Create Logout.bat (Graceful RDP Disconnect)
         shell: pwsh
         run: |
-          # 先等待用户Profile目录创建完成
+          # 等待用户Profile目录创建完成
           $maxWait = 30
           $waited = 0
           while (-not (Test-Path "C:\Users\vum") -and $waited -lt $maxWait) {
@@ -88,12 +89,6 @@ jobs:
             Start-Sleep -Seconds 2
             $waited += 2
           }
-
-          # 使用多个可能的桌面路径，确保文件一定能被找到
-          $desktopPaths = @(
-            "C:\Users\vum\Desktop",
-            "C:\Users\Public\Desktop"
-          )
 
           $batLines = @(
             '@echo off',
@@ -117,19 +112,22 @@ jobs:
             'pause'
           )
 
+          # 写入多个位置确保能找到
+          $desktopPaths = @(
+            "C:\Users\vum\Desktop",
+            "C:\Users\Public\Desktop"
+          )
+
           foreach ($desktopPath in $desktopPaths) {
-            # 确保目录存在
             if (-not (Test-Path $desktopPath)) {
               New-Item -ItemType Directory -Path $desktopPath -Force | Out-Null
               Write-Host "Created directory: $desktopPath"
             }
 
-            # 写入 Logout.bat
             $batPath = "$desktopPath\Logout.bat"
             $batLines | Set-Content -Path $batPath -Encoding ASCII -Force
             Write-Host "Logout.bat created at: $batPath"
 
-            # 创建快捷方式
             try {
               $shortcutPath = "$desktopPath\Disconnect-RDP.lnk"
               $WshShell = New-Object -ComObject WScript.Shell
@@ -144,20 +142,24 @@ jobs:
             }
           }
 
-          # 额外：把文件也放到 C:\Users\vum 根目录，方便找
+          # 额外放到用户根目录备用
           $fallbackPath = "C:\Users\vum\Logout.bat"
           $batLines | Set-Content -Path $fallbackPath -Encoding ASCII -Force
-          Write-Host "Fallback Logout.bat also created at: $fallbackPath"
+          Write-Host "Fallback Logout.bat created at: $fallbackPath"
 
-          # 验证文件存在
+          # 验证文件
           Write-Host ""
           Write-Host "=== Verification ==="
-          foreach ($desktopPath in $desktopPaths) {
-            $batPath = "$desktopPath\Logout.bat"
-            if (Test-Path $batPath) {
-              Write-Host "[OK] $batPath"
+          $checkPaths = @(
+            "C:\Users\vum\Desktop\Logout.bat",
+            "C:\Users\Public\Desktop\Logout.bat",
+            "C:\Users\vum\Logout.bat"
+          )
+          foreach ($p in $checkPaths) {
+            if (Test-Path $p) {
+              Write-Host "[OK]      $p"
             } else {
-              Write-Host "[MISSING] $batPath"
+              Write-Host "[MISSING] $p"
             }
           }
 
@@ -173,8 +175,8 @@ jobs:
           Write-Host ""
           Write-Host "Logout.bat locations:"
           Write-Host "  1. C:\Users\vum\Desktop\Logout.bat"
-          Write-Host "  2. C:\Users\Public\Desktop\Logout.bat  <- Public Desktop (easier to find)"
-          Write-Host "  3. C:\Users\vum\Logout.bat             <- Fallback"
+          Write-Host "  2. C:\Users\Public\Desktop\Logout.bat"
+          Write-Host "  3. C:\Users\vum\Logout.bat"
           Write-Host ""
           Write-Host "Before closing RDP:"
           Write-Host "  Double-click [Disconnect-RDP.lnk] on desktop"
